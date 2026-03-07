@@ -19,6 +19,13 @@ import {
   recordLog,
   setStatus,
 } from "./telemetry";
+import {
+  initSession,
+  appendSession,
+  writeSessionSummary,
+  getResumeContext,
+  getWorkspaceState,
+} from "./session";
 
 // Allow running from within another Claude Code session
 delete process.env.CLAUDECODE;
@@ -162,12 +169,26 @@ async function main() {
   console.log(`Prompt: ${prompt.slice(0, 100)}...\n`);
 
   initTelemetry();
-  await notify("Session started. Prompt: " + prompt.slice(0, 200));
+  initSession();
+
+  // Check for previous session to resume from
+  const resumeContext = getResumeContext();
+  const workspaceState = getWorkspaceState();
+  let effectivePrompt = prompt;
+
+  if (resumeContext) {
+    console.log("Resuming from previous session...\n");
+    effectivePrompt = `${resumeContext}\n${workspaceState}\n\nOriginal goal: ${prompt}\n\nContinue the research. Do NOT repeat already-completed experiments.`;
+    await notify("Resuming from previous session");
+  } else {
+    await notify("Session started. Prompt: " + prompt.slice(0, 200));
+  }
 
   let turnCount = 0;
+  let lastSummary = "";
 
   for await (const message of query({
-    prompt,
+    prompt: effectivePrompt,
     options: {
       cwd: process.cwd(),
       systemPrompt: ORCHESTRATOR_PROMPT,
@@ -178,6 +199,14 @@ async function main() {
       allowDangerouslySkipPermissions: true,
     },
   })) {
+    // Log any commands that came in
+    if (fs.existsSync(COMMANDS_FILE)) {
+      const cmd = fs.readFileSync(COMMANDS_FILE, "utf-8").trim();
+      if (cmd) {
+        appendSession({ time: new Date().toISOString(), role: "command", content: cmd });
+      }
+    }
+
     // Check if orchestrator is asking for user input
     if (fs.existsSync(INPUT_FILE)) {
       const question = fs.readFileSync(INPUT_FILE, "utf-8").trim();
@@ -212,6 +241,18 @@ async function main() {
         if (text && msg.role === "assistant") {
           console.log(`\n[turn ${turnCount}] ${text.slice(0, 200)}`);
           recordLog(text.slice(0, 300));
+
+          // Checkpoint conversation to disk
+          appendSession({ time: new Date().toISOString(), role: "orchestrator", content: text });
+          lastSummary = text;
+
+          // Write running summary every 5 turns
+          if (turnCount % 5 === 0) {
+            writeSessionSummary(
+              `Last updated: ${new Date().toISOString()}\nTurn: ${turnCount}\n\nLast orchestrator output:\n${lastSummary.slice(0, 1000)}\n${getWorkspaceState()}`
+            );
+          }
+
           if (turnCount % 3 === 0 || text.includes("best score") || text.includes("Phase")) {
             await notify(text.slice(0, 500));
           }
