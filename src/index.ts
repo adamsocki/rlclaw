@@ -54,7 +54,11 @@ All your work goes in workspace/ (gitignored). Do NOT write to src/.
   workspace/results.json  — experiment result tracker
 
 GPU: Local RTX 5070 Ti (16GB VRAM). Run experiments directly as python scripts.
-Max 15 min per experiment. Controllers must run at 10Hz+, target <100K params.
+No hard time limit — long training runs (hours/days) are fine IF:
+  - You checkpoint frequently (every 10 min minimum) to workspace/checkpoints/
+  - You log progress to workspace/eval/ so results survive crashes
+  - You don't hog the GPU if another task is queued — check commands.txt
+Controllers must run at 10Hz+ (real-time). Target <100K params for efficiency.
 
 Quick eval (~7s): cd vendor/commaai && python3 tinyphysics.py --model_path ./models/tinyphysics.onnx --data_path ./data --num_segs 100 --controller pid`;
 
@@ -76,7 +80,11 @@ in the project root. If it has content, read it, acknowledge by writing a short 
 src/discord_response.txt, and adapt your current work if the command is relevant.
 
 All your work goes in workspace/ — controllers, training scripts, checkpoints, results.
-Do NOT write to src/. Read vendor/ for reference but don't modify it.`,
+Do NOT write to src/. Read vendor/ for reference but don't modify it.
+
+CHECKPOINTING: All training scripts MUST save checkpoints periodically (every 10 min minimum)
+to workspace/checkpoints/ so work survives crashes. Log metrics to workspace/eval/ after
+each checkpoint. Update workspace/results.json with experiment progress.`,
     tools: ["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
   },
 };
