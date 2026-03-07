@@ -8,6 +8,7 @@ import { notify } from "./notify";
 delete process.env.CLAUDECODE;
 
 const COMMANDS_FILE = path.join(__dirname, "..", "commands.txt");
+const INPUT_FILE = path.join(__dirname, "discord_input.txt");
 
 const CHALLENGE_CONTEXT = `=== COMMA CONTROLS CHALLENGE ===
 Goal: Minimize total_cost = (lataccel_cost * 50) + jerk_cost for lateral car control.
@@ -71,6 +72,13 @@ Before each new worker task, check if commands.txt exists and has content.
 If it does, read it, incorporate the instructions, then clear the file by writing an empty string.
 This lets the user redirect your research without stopping the session.
 
+=== ASKING FOR INPUT ===
+If you hit a decision point where user input would be valuable (e.g., which direction to explore,
+whether to spend GPU time on something risky, or you're stuck), write a message to the file
+src/discord_input.txt with your question. The system will ping the user on Discord.
+Then check commands.txt on subsequent turns for their response.
+Only do this for genuine decision points — don't block on every step.
+
 === RESEARCH STRATEGY ===
 Phase 1: Understand
   - Run PID baseline, study tfpgh solution architecture
@@ -124,13 +132,21 @@ async function main() {
       allowDangerouslySkipPermissions: true,
     },
   })) {
+    // Check if orchestrator is asking for user input
+    if (fs.existsSync(INPUT_FILE)) {
+      const question = fs.readFileSync(INPUT_FILE, "utf-8").trim();
+      if (question) {
+        await notify(question + "\n\n_Reply by writing to `commands.txt` on the server._", "input");
+        fs.unlinkSync(INPUT_FILE);
+      }
+    }
+
     if ("result" in message) {
       console.log("\n=== Result ===");
       console.log(message.result);
       await notify(message.result.slice(0, 500), "success");
     } else if ("message" in message) {
       turnCount++;
-      // Notify on orchestrator text output (its review/planning messages)
       const msg = message.message as any;
       if (msg?.content) {
         const text = Array.isArray(msg.content)
@@ -141,7 +157,6 @@ async function main() {
           : String(msg.content);
         if (text && msg.role === "assistant") {
           console.log(`\n[turn ${turnCount}] ${text.slice(0, 200)}`);
-          // Only notify on substantial updates, not every turn
           if (turnCount % 3 === 0 || text.includes("best score") || text.includes("Phase")) {
             await notify(text.slice(0, 500));
           }
