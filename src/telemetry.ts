@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 
-const TELEMETRY_PATH = path.join(__dirname, "..", "src", "telemetry.json");
+const TELEMETRY_PATH = path.join(__dirname, "telemetry.json");
 
 export interface TelemetryData {
   sessionStart: string;
@@ -19,6 +19,7 @@ export interface TelemetryData {
   };
   costEstimate: number; // USD
   log: Array<{ time: string; msg: string }>;
+  discord: Array<{ time: string; channel: string; msg: string }>;
 }
 
 const PRICING = {
@@ -41,6 +42,7 @@ function defaultTelemetry(): TelemetryData {
     usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
     costEstimate: 0,
     log: [],
+    discord: [],
   };
 }
 
@@ -87,6 +89,12 @@ export function recordLog(msg: string): void {
   // Keep last 50 entries
   if (telem.log.length > 50) telem.log = telem.log.slice(-50);
   telem.lastActivity = new Date().toISOString();
+  save();
+}
+
+export function recordDiscord(channel: string, msg: string): void {
+  telem.discord.push({ time: new Date().toISOString(), channel, msg: msg.slice(0, 500) });
+  if (telem.discord.length > 100) telem.discord = telem.discord.slice(-100);
   save();
 }
 

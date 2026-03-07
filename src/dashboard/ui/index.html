@@ -107,9 +107,16 @@
     </div>
   </div>
 
-  <div class="card full" style="margin-bottom:14px">
-    <h3>Activity Log</h3>
-    <div class="log" id="log"></div>
+  <div class="grid-2">
+    <div class="card">
+      <h3>Activity Log</h3>
+      <div class="log" id="log"></div>
+    </div>
+
+    <div class="card">
+      <h3>Discord Messages</h3>
+      <div class="log" id="discord-log"></div>
+    </div>
   </div>
 
   <div class="card full">
@@ -173,6 +180,14 @@
           logEl.innerHTML = (telem.log || []).slice().reverse().map(e => {
             const t = new Date(e.time).toLocaleTimeString();
             return `<div class="log-entry"><span class="time">${t}</span><span class="msg">${e.msg}</span></div>`;
+          }).join('');
+
+          // Discord log
+          const discordEl = document.getElementById('discord-log');
+          discordEl.innerHTML = (telem.discord || []).slice().reverse().map(e => {
+            const t = new Date(e.time).toLocaleTimeString();
+            const ch = e.channel === 'vibes' ? '#vibes' : '#rlclaw';
+            return `<div class="log-entry"><span class="time">${t}</span><span style="color:#5865F2;margin-right:6px">${ch}</span><span class="msg">${e.msg.replace(/\*\*/g, '')}</span></div>`;
           }).join('');
         }
 
