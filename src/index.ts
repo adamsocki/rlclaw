@@ -1,8 +1,13 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentDefinition } from "@anthropic-ai/claude-agent-sdk";
+import * as fs from "fs";
+import * as path from "path";
+import { notify } from "./notify";
 
 // Allow running from within another Claude Code session
 delete process.env.CLAUDECODE;
+
+const COMMANDS_FILE = path.join(__dirname, "..", "commands.txt");
 
 const CHALLENGE_CONTEXT = `=== COMMA CONTROLS CHALLENGE ===
 Goal: Minimize total_cost = (lataccel_cost * 50) + jerk_cost for lateral car control.
@@ -60,6 +65,12 @@ Bad: "Study the SOTA solution"
 Good: "Write a CMA-ES training script to src/algos/cmaes_mlp.py that evolves a 2-hidden-layer MLP (32,16) to minimize total_cost on 100 segments. Run it for 5 minutes."
 Bad: "Try to beat PID"
 
+=== COMMANDS FILE ===
+The user can steer you by writing to commands.txt in the project root.
+Before each new worker task, check if commands.txt exists and has content.
+If it does, read it, incorporate the instructions, then clear the file by writing an empty string.
+This lets the user redirect your research without stopping the session.
+
 === RESEARCH STRATEGY ===
 Phase 1: Understand
   - Run PID baseline, study tfpgh solution architecture
@@ -93,7 +104,13 @@ async function main() {
   console.log(`\n=== rlclaw — comma controls challenge ===`);
   console.log(`Mode: orchestrator + single worker`);
   console.log(`GPU: RTX 5070 Ti (16GB VRAM)`);
+  console.log(`Discord: notifications enabled`);
+  console.log(`Commands: write to commands.txt to steer research`);
   console.log(`Prompt: ${prompt.slice(0, 100)}...\n`);
+
+  await notify("Session started. Prompt: " + prompt.slice(0, 200));
+
+  let turnCount = 0;
 
   for await (const message of query({
     prompt,
@@ -110,8 +127,34 @@ async function main() {
     if ("result" in message) {
       console.log("\n=== Result ===");
       console.log(message.result);
+      await notify(message.result.slice(0, 500), "success");
+    } else if ("message" in message) {
+      turnCount++;
+      // Notify on orchestrator text output (its review/planning messages)
+      const msg = message.message as any;
+      if (msg?.content) {
+        const text = Array.isArray(msg.content)
+          ? msg.content
+              .filter((b: any) => b.type === "text")
+              .map((b: any) => b.text)
+              .join("\n")
+          : String(msg.content);
+        if (text && msg.role === "assistant") {
+          console.log(`\n[turn ${turnCount}] ${text.slice(0, 200)}`);
+          // Only notify on substantial updates, not every turn
+          if (turnCount % 3 === 0 || text.includes("best score") || text.includes("Phase")) {
+            await notify(text.slice(0, 500));
+          }
+        }
+      }
     }
   }
+
+  await notify("Session complete.", "success");
 }
 
-main().catch(console.error);
+main().catch(async (err) => {
+  console.error(err);
+  await notify(`Error: ${String(err).slice(0, 300)}`, "error");
+  process.exit(1);
+});
