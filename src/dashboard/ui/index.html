@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>rlclaw dashboard</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'SF Mono', 'Fira Code', monospace; background: #0a0a0a; color: #e0e0e0; padding: 20px; }
+    h1 { color: #ff6b35; margin-bottom: 4px; font-size: 1.4em; }
+    h2 { color: #888; font-size: 0.9em; font-weight: normal; margin-bottom: 20px; }
+    h3 { color: #ff6b35; font-size: 1em; margin-bottom: 10px; border-bottom: 1px solid #222; padding-bottom: 4px; }
+
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+    .card { background: #141414; border: 1px solid #222; border-radius: 6px; padding: 16px; }
+    .card.full { grid-column: 1 / -1; }
+
+    .status { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+    .status.available { background: #22c55e; }
+    .status.running { background: #f59e0b; animation: pulse 1.5s infinite; }
+    .status.checked_out { background: #3b82f6; }
+    .status.completed { background: #22c55e; }
+    .status.error { background: #ef4444; }
+    .status.idle { background: #666; }
+
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+    .notebook { display: flex; align-items: center; padding: 8px 0; border-bottom: 1px solid #1a1a1a; }
+    .notebook:last-child { border-bottom: none; }
+    .notebook .id { color: #ff6b35; width: 30px; }
+    .notebook .agent { color: #3b82f6; flex: 1; }
+    .notebook .exp { color: #888; flex: 2; }
+    .notebook .time { color: #666; width: 80px; text-align: right; }
+
+    .experiment { padding: 6px 0; border-bottom: 1px solid #1a1a1a; font-size: 0.85em; }
+    .experiment:last-child { border-bottom: none; }
+    .experiment .metric { color: #22c55e; font-weight: bold; }
+    .experiment .metric.bad { color: #ef4444; }
+    .experiment .name { color: #e0e0e0; }
+    .experiment .agent-name { color: #3b82f6; }
+    .experiment .time-ago { color: #666; }
+
+    .problem-card { margin-bottom: 8px; }
+    .problem-card .header { display: flex; justify-content: space-between; align-items: center; }
+    .problem-card .score { font-size: 1.5em; color: #22c55e; }
+
+    .bridge-status { font-size: 0.85em; }
+    .bridge-status.connected { color: #22c55e; }
+    .bridge-status.disconnected { color: #ef4444; }
+
+    .empty { color: #444; font-style: italic; padding: 10px 0; }
+    .refresh { color: #444; font-size: 0.8em; margin-top: 12px; }
+  </style>
+</head>
+<body>
+  <h1>rlclaw</h1>
+  <h2>agent research environment &mdash; <span id="bridge-status" class="bridge-status">checking bridge...</span></h2>
+
+  <div class="grid">
+    <div class="card">
+      <h3>Notebook Pool</h3>
+      <div id="pool">loading...</div>
+    </div>
+
+    <div class="card">
+      <h3>Active Problems</h3>
+      <div id="problems">loading...</div>
+    </div>
+
+    <div class="card full">
+      <h3>Recent Experiments</h3>
+      <div id="experiments">loading...</div>
+    </div>
+  </div>
+
+  <div class="refresh">Auto-refreshes every 5s</div>
+
+  <script>
+    const API = '';
+
+    async function fetchJson(url) {
+      try {
+        const res = await fetch(API + url);
+        return await res.json();
+      } catch { return null; }
+    }
+
+    function timeLeft(deadline) {
+      if (!deadline) return '';
+      const mins = Math.max(0, Math.round((deadline - Date.now()) / 60000));
+      return `${mins}m left`;
+    }
+
+    function timeAgo(ts) {
+      if (!ts) return '';
+      const secs = Math.round((Date.now() - new Date(ts).getTime()) / 1000);
+      if (secs < 60) return `${secs}s ago`;
+      if (secs < 3600) return `${Math.round(secs / 60)}m ago`;
+      return `${Math.round(secs / 3600)}h ago`;
+    }
+
+    async function refresh() {
+      // Bridge
+      const bridge = await fetchJson('/api/bridge');
+      const bs = document.getElementById('bridge-status');
+      if (bridge?.connected) {
+        bs.textContent = 'bridge connected';
+        bs.className = 'bridge-status connected';
+      } else {
+        bs.textContent = 'bridge disconnected';
+        bs.className = 'bridge-status disconnected';
+      }
+
+      // Pool
+      const pool = await fetchJson('/api/pool');
+      const poolEl = document.getElementById('pool');
+      if (pool?.notebooks) {
+        poolEl.innerHTML = pool.notebooks.map(n => `
+          <div class="notebook">
+            <span class="id">${n.id}</span>
+            <span class="status ${n.status}"></span>
+            <span class="agent">${n.checkedOutBy || 'available'}</span>
+            <span class="exp">${n.experimentName || ''}</span>
+            <span class="time">${timeLeft(n.deadline)}</span>
+          </div>
+        `).join('');
+      }
+
+      // Problems
+      const problems = await fetchJson('/api/problems');
+      const probEl = document.getElementById('problems');
+      if (problems && problems.length > 0) {
+        probEl.innerHTML = problems.map(p => `
+          <div class="problem-card">
+            <div class="header">
+              <div>
+                <span class="status ${p.status}"></span>
+                <strong>${p.id}</strong>
+              </div>
+              <div class="score">${p.bestScore !== null ? p.bestScore.toFixed(1) : '—'}</div>
+            </div>
+            <div style="color: #666; font-size: 0.85em;">
+              ${p.experiments.length} experiments
+              ${p.bestExperiment ? ` · best: ${p.bestExperiment}` : ''}
+            </div>
+          </div>
+        `).join('');
+      } else {
+        probEl.innerHTML = '<div class="empty">No problems running</div>';
+      }
+
+      // Experiments (collect from all problems, sort by time)
+      const expEl = document.getElementById('experiments');
+      if (problems) {
+        const allExps = problems.flatMap(p =>
+          p.experiments.map(e => ({ ...e, problem: p.id }))
+        ).sort((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime())
+         .slice(0, 20);
+
+        if (allExps.length > 0) {
+          expEl.innerHTML = allExps.map(e => {
+            const cost = e.metrics?.total_cost;
+            const costClass = cost !== undefined && cost < 73 ? 'metric' : 'metric bad';
+            return `
+              <div class="experiment">
+                <span class="status ${e.status}"></span>
+                <span class="name">${e.name}</span>
+                <span class="agent-name">${e.problem}:${e.agent}</span>
+                ${cost !== undefined ? `<span class="${costClass}">${cost.toFixed(1)}</span>` : ''}
+                <span class="time-ago">${timeAgo(e.startedAt)}</span>
+                <span style="color: #444">${e.status}</span>
+              </div>
+            `;
+          }).join('');
+        } else {
+          expEl.innerHTML = '<div class="empty">No experiments yet</div>';
+        }
+      }
+    }
+
+    refresh();
+    setInterval(refresh, 5000);
+  </script>
+</body>
+</html>

@@ -1,0 +1,22 @@
+{
+  "name": "rlclaw",
+  "version": "1.0.0",
+  "description": "General-purpose agent environment for RL research",
+  "main": "dist/index.js",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "dashboard": "tsx src/dashboard/server.ts",
+    "dev": "tsx src/dashboard/server.ts & tsx src/index.ts",
+    "problem:comma": "tsx src/index.ts --prompt='Begin the comma controls challenge research program'"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.71",
+    "@types/node": "^25.3.5",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}
