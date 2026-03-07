@@ -6,180 +6,235 @@
   <title>rlclaw dashboard</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: 'SF Mono', 'Fira Code', monospace; background: #0a0a0a; color: #e0e0e0; padding: 20px; }
+    body { font-family: 'SF Mono', 'Fira Code', monospace; background: #0a0a0a; color: #e0e0e0; padding: 20px; max-width: 1200px; margin: 0 auto; }
     h1 { color: #ff6b35; margin-bottom: 4px; font-size: 1.4em; }
-    h2 { color: #888; font-size: 0.9em; font-weight: normal; margin-bottom: 20px; }
-    h3 { color: #ff6b35; font-size: 1em; margin-bottom: 10px; border-bottom: 1px solid #222; padding-bottom: 4px; }
+    .subtitle { color: #666; font-size: 0.85em; margin-bottom: 20px; }
+    h3 { color: #ff6b35; font-size: 0.95em; margin-bottom: 10px; border-bottom: 1px solid #222; padding-bottom: 4px; }
 
-    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; margin-bottom: 14px; }
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }
     .card { background: #141414; border: 1px solid #222; border-radius: 6px; padding: 16px; }
     .card.full { grid-column: 1 / -1; }
 
-    .status { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
-    .status.available { background: #22c55e; }
-    .status.running { background: #f59e0b; animation: pulse 1.5s infinite; }
-    .status.checked_out { background: #3b82f6; }
-    .status.completed { background: #22c55e; }
-    .status.error { background: #ef4444; }
-    .status.idle { background: #666; }
+    .stat { margin-bottom: 10px; }
+    .stat .label { color: #666; font-size: 0.8em; text-transform: uppercase; }
+    .stat .value { font-size: 1.4em; color: #e0e0e0; }
+    .stat .value.highlight { color: #22c55e; }
+    .stat .value.warn { color: #f59e0b; }
+    .stat .value.bad { color: #ef4444; }
 
+    .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+    .status-dot.running { background: #22c55e; animation: pulse 1.5s infinite; }
+    .status-dot.idle { background: #666; }
+    .status-dot.error { background: #ef4444; }
+    .status-dot.complete { background: #3b82f6; }
     @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 
-    .notebook { display: flex; align-items: center; padding: 8px 0; border-bottom: 1px solid #1a1a1a; }
-    .notebook:last-child { border-bottom: none; }
-    .notebook .id { color: #ff6b35; width: 30px; }
-    .notebook .agent { color: #3b82f6; flex: 1; }
-    .notebook .exp { color: #888; flex: 2; }
-    .notebook .time { color: #666; width: 80px; text-align: right; }
+    .gpu-bar { background: #222; border-radius: 3px; height: 8px; margin-top: 4px; overflow: hidden; }
+    .gpu-bar .fill { height: 100%; border-radius: 3px; transition: width 0.5s; }
+    .gpu-bar .fill.low { background: #22c55e; }
+    .gpu-bar .fill.mid { background: #f59e0b; }
+    .gpu-bar .fill.high { background: #ef4444; }
 
-    .experiment { padding: 6px 0; border-bottom: 1px solid #1a1a1a; font-size: 0.85em; }
-    .experiment:last-child { border-bottom: none; }
-    .experiment .metric { color: #22c55e; font-weight: bold; }
-    .experiment .metric.bad { color: #ef4444; }
-    .experiment .name { color: #e0e0e0; }
-    .experiment .agent-name { color: #3b82f6; }
-    .experiment .time-ago { color: #666; }
+    .baseline { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid #1a1a1a; font-size: 0.85em; }
+    .baseline:last-child { border-bottom: none; }
+    .baseline .name { color: #888; }
+    .baseline .score { color: #e0e0e0; font-weight: bold; }
 
-    .problem-card { margin-bottom: 8px; }
-    .problem-card .header { display: flex; justify-content: space-between; align-items: center; }
-    .problem-card .score { font-size: 1.5em; color: #22c55e; }
+    .log { max-height: 300px; overflow-y: auto; font-size: 0.8em; }
+    .log-entry { padding: 3px 0; border-bottom: 1px solid #111; }
+    .log-entry .time { color: #444; margin-right: 8px; }
+    .log-entry .msg { color: #aaa; }
 
-    .bridge-status { font-size: 0.85em; }
-    .bridge-status.connected { color: #22c55e; }
-    .bridge-status.disconnected { color: #ef4444; }
+    .cmd-input { display: flex; gap: 8px; margin-top: 10px; }
+    .cmd-input input { flex: 1; background: #1a1a1a; border: 1px solid #333; color: #e0e0e0; padding: 8px; border-radius: 4px; font-family: inherit; font-size: 0.85em; }
+    .cmd-input input:focus { outline: none; border-color: #ff6b35; }
+    .cmd-input button { background: #ff6b35; color: #fff; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-family: inherit; font-size: 0.85em; }
+    .cmd-input button:hover { background: #e55a2b; }
 
-    .empty { color: #444; font-style: italic; padding: 10px 0; }
-    .refresh { color: #444; font-size: 0.8em; margin-top: 12px; }
+    .task { color: #3b82f6; font-size: 0.85em; margin-top: 6px; word-break: break-word; }
+    .refresh-info { color: #333; font-size: 0.75em; margin-top: 12px; }
   </style>
 </head>
 <body>
   <h1>rlclaw</h1>
-  <h2>agent research environment &mdash; <span id="bridge-status" class="bridge-status">checking bridge...</span></h2>
+  <div class="subtitle">comma controls challenge v2 &mdash; <span id="status-text">loading...</span></div>
 
   <div class="grid">
     <div class="card">
-      <h3>Notebook Pool</h3>
-      <div id="pool">loading...</div>
+      <h3>Session</h3>
+      <div class="stat"><div class="label">Status</div><div class="value" id="session-status">—</div></div>
+      <div class="stat"><div class="label">Turns</div><div class="value" id="turns">—</div></div>
+      <div class="stat"><div class="label">Worker Calls</div><div class="value" id="worker-calls">—</div></div>
+      <div class="stat"><div class="label">Runtime</div><div class="value" id="runtime">—</div></div>
     </div>
 
     <div class="card">
-      <h3>Active Problems</h3>
-      <div id="problems">loading...</div>
+      <h3>Cost</h3>
+      <div class="stat"><div class="label">Estimated USD</div><div class="value warn" id="cost">—</div></div>
+      <div class="stat"><div class="label">Input Tokens</div><div class="value" id="input-tokens">—</div></div>
+      <div class="stat"><div class="label">Output Tokens</div><div class="value" id="output-tokens">—</div></div>
+      <div class="stat"><div class="label">Cache Read</div><div class="value" id="cache-read">—</div></div>
     </div>
 
-    <div class="card full">
-      <h3>Recent Experiments</h3>
-      <div id="experiments">loading...</div>
+    <div class="card">
+      <h3>GPU</h3>
+      <div class="stat"><div class="label">Device</div><div class="value" id="gpu-name" style="font-size:0.9em">—</div></div>
+      <div class="stat">
+        <div class="label">VRAM</div>
+        <div class="value" id="gpu-mem">—</div>
+        <div class="gpu-bar"><div class="fill low" id="gpu-mem-bar" style="width:0%"></div></div>
+      </div>
+      <div class="stat">
+        <div class="label">Utilization</div>
+        <div class="value" id="gpu-util">—</div>
+        <div class="gpu-bar"><div class="fill low" id="gpu-util-bar" style="width:0%"></div></div>
+      </div>
+      <div class="stat"><div class="label">Temp</div><div class="value" id="gpu-temp">—</div></div>
     </div>
   </div>
 
-  <div class="refresh">Auto-refreshes every 5s</div>
+  <div class="grid-2">
+    <div class="card">
+      <h3>Scores</h3>
+      <div class="stat"><div class="label">Our Best</div><div class="value highlight" id="best-score">—</div></div>
+      <div id="baselines"></div>
+    </div>
+
+    <div class="card">
+      <h3>Current Task</h3>
+      <div class="task" id="current-task">No task running</div>
+    </div>
+  </div>
+
+  <div class="card full" style="margin-bottom:14px">
+    <h3>Activity Log</h3>
+    <div class="log" id="log"></div>
+  </div>
+
+  <div class="card full">
+    <h3>Send Command</h3>
+    <div style="color:#666;font-size:0.8em;margin-bottom:8px">Steer the orchestrator — it picks up commands between worker tasks</div>
+    <div class="cmd-input">
+      <input type="text" id="cmd-input" placeholder="e.g. Focus on MPC approach, skip behavioral cloning">
+      <button onclick="sendCmd()">Send</button>
+    </div>
+    <div id="cmd-status" style="color:#444;font-size:0.8em;margin-top:4px"></div>
+  </div>
+
+  <div class="refresh-info">Auto-refreshes every 3s</div>
 
   <script>
-    const API = '';
-
-    async function fetchJson(url) {
-      try {
-        const res = await fetch(API + url);
-        return await res.json();
-      } catch { return null; }
+    function fmt(n) {
+      if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+      if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+      return String(n);
     }
 
-    function timeLeft(deadline) {
-      if (!deadline) return '';
-      const mins = Math.max(0, Math.round((deadline - Date.now()) / 60000));
-      return `${mins}m left`;
-    }
-
-    function timeAgo(ts) {
-      if (!ts) return '';
-      const secs = Math.round((Date.now() - new Date(ts).getTime()) / 1000);
-      if (secs < 60) return `${secs}s ago`;
-      if (secs < 3600) return `${Math.round(secs / 60)}m ago`;
-      return `${Math.round(secs / 3600)}h ago`;
+    function duration(start) {
+      const ms = Date.now() - new Date(start).getTime();
+      const mins = Math.floor(ms / 60000);
+      const hrs = Math.floor(mins / 60);
+      if (hrs > 0) return `${hrs}h ${mins % 60}m`;
+      return `${mins}m`;
     }
 
     async function refresh() {
-      // Bridge
-      const bridge = await fetchJson('/api/bridge');
-      const bs = document.getElementById('bridge-status');
-      if (bridge?.connected) {
-        bs.textContent = 'bridge connected';
-        bs.className = 'bridge-status connected';
-      } else {
-        bs.textContent = 'bridge disconnected';
-        bs.className = 'bridge-status disconnected';
-      }
+      try {
+        const [telem, results, gpu] = await Promise.all([
+          fetch('/api/telemetry').then(r => r.json()).catch(() => null),
+          fetch('/api/results').then(r => r.json()).catch(() => null),
+          fetch('/api/gpu').then(r => r.json()).catch(() => null),
+        ]);
 
-      // Pool
-      const pool = await fetchJson('/api/pool');
-      const poolEl = document.getElementById('pool');
-      if (pool?.notebooks) {
-        poolEl.innerHTML = pool.notebooks.map(n => `
-          <div class="notebook">
-            <span class="id">${n.id}</span>
-            <span class="status ${n.status}"></span>
-            <span class="agent">${n.checkedOutBy || 'available'}</span>
-            <span class="exp">${n.experimentName || ''}</span>
-            <span class="time">${timeLeft(n.deadline)}</span>
-          </div>
-        `).join('');
-      }
+        // Session
+        if (telem && telem.status !== 'no session') {
+          const statusEl = document.getElementById('session-status');
+          statusEl.innerHTML = `<span class="status-dot ${telem.status}"></span>${telem.status}`;
+          document.getElementById('status-text').textContent = telem.status;
+          document.getElementById('turns').textContent = telem.turns;
+          document.getElementById('worker-calls').textContent = telem.workerCalls;
+          document.getElementById('runtime').textContent = duration(telem.sessionStart);
 
-      // Problems
-      const problems = await fetchJson('/api/problems');
-      const probEl = document.getElementById('problems');
-      if (problems && problems.length > 0) {
-        probEl.innerHTML = problems.map(p => `
-          <div class="problem-card">
-            <div class="header">
-              <div>
-                <span class="status ${p.status}"></span>
-                <strong>${p.id}</strong>
-              </div>
-              <div class="score">${p.bestScore !== null ? p.bestScore.toFixed(1) : '—'}</div>
-            </div>
-            <div style="color: #666; font-size: 0.85em;">
-              ${p.experiments.length} experiments
-              ${p.bestExperiment ? ` · best: ${p.bestExperiment}` : ''}
-            </div>
-          </div>
-        `).join('');
-      } else {
-        probEl.innerHTML = '<div class="empty">No problems running</div>';
-      }
+          // Cost
+          document.getElementById('cost').textContent = '$' + telem.costEstimate.toFixed(2);
+          document.getElementById('input-tokens').textContent = fmt(telem.usage.inputTokens);
+          document.getElementById('output-tokens').textContent = fmt(telem.usage.outputTokens);
+          document.getElementById('cache-read').textContent = fmt(telem.usage.cacheReadTokens);
 
-      // Experiments (collect from all problems, sort by time)
-      const expEl = document.getElementById('experiments');
-      if (problems) {
-        const allExps = problems.flatMap(p =>
-          p.experiments.map(e => ({ ...e, problem: p.id }))
-        ).sort((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime())
-         .slice(0, 20);
+          // Best score
+          document.getElementById('best-score').textContent = telem.bestScore !== null ? telem.bestScore.toFixed(2) : 'no experiments yet';
 
-        if (allExps.length > 0) {
-          expEl.innerHTML = allExps.map(e => {
-            const cost = e.metrics?.total_cost;
-            const costClass = cost !== undefined && cost < 73 ? 'metric' : 'metric bad';
-            return `
-              <div class="experiment">
-                <span class="status ${e.status}"></span>
-                <span class="name">${e.name}</span>
-                <span class="agent-name">${e.problem}:${e.agent}</span>
-                ${cost !== undefined ? `<span class="${costClass}">${cost.toFixed(1)}</span>` : ''}
-                <span class="time-ago">${timeAgo(e.startedAt)}</span>
-                <span style="color: #444">${e.status}</span>
-              </div>
-            `;
+          // Current task
+          document.getElementById('current-task').textContent = telem.currentTask || 'Idle';
+
+          // Log
+          const logEl = document.getElementById('log');
+          logEl.innerHTML = (telem.log || []).slice().reverse().map(e => {
+            const t = new Date(e.time).toLocaleTimeString();
+            return `<div class="log-entry"><span class="time">${t}</span><span class="msg">${e.msg}</span></div>`;
           }).join('');
-        } else {
-          expEl.innerHTML = '<div class="empty">No experiments yet</div>';
         }
-      }
+
+        // Results
+        if (results?.baselines) {
+          const bl = document.getElementById('baselines');
+          bl.innerHTML = Object.entries(results.baselines).map(([name, data]) =>
+            `<div class="baseline"><span class="name">${name}</span><span class="score">${data.total_cost ?? '—'}</span></div>`
+          ).join('');
+        }
+
+        // GPU
+        if (gpu && !gpu.error) {
+          document.getElementById('gpu-name').textContent = gpu.name;
+          const memPct = Math.round((gpu.memUsedMB / gpu.memTotalMB) * 100);
+          document.getElementById('gpu-mem').textContent = `${gpu.memUsedMB}/${gpu.memTotalMB} MB (${memPct}%)`;
+          const memBar = document.getElementById('gpu-mem-bar');
+          memBar.style.width = memPct + '%';
+          memBar.className = 'fill ' + (memPct > 80 ? 'high' : memPct > 50 ? 'mid' : 'low');
+
+          document.getElementById('gpu-util').textContent = gpu.util + '%';
+          const utilBar = document.getElementById('gpu-util-bar');
+          utilBar.style.width = gpu.util + '%';
+          utilBar.className = 'fill ' + (gpu.util > 80 ? 'high' : gpu.util > 50 ? 'mid' : 'low');
+
+          document.getElementById('gpu-temp').textContent = gpu.temp + '°C';
+        }
+      } catch {}
     }
 
+    async function sendCmd() {
+      const input = document.getElementById('cmd-input');
+      const status = document.getElementById('cmd-status');
+      const cmd = input.value.trim();
+      if (!cmd) return;
+      try {
+        const res = await fetch('/api/command', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ command: cmd }),
+        });
+        if (res.ok) {
+          status.textContent = 'Command sent — will be picked up next cycle';
+          status.style.color = '#22c55e';
+          input.value = '';
+        } else {
+          status.textContent = 'Failed to send';
+          status.style.color = '#ef4444';
+        }
+      } catch {
+        status.textContent = 'Error sending command';
+        status.style.color = '#ef4444';
+      }
+      setTimeout(() => { status.textContent = ''; }, 5000);
+    }
+
+    document.getElementById('cmd-input').addEventListener('keydown', e => {
+      if (e.key === 'Enter') sendCmd();
+    });
+
     refresh();
-    setInterval(refresh, 5000);
+    setInterval(refresh, 3000);
   </script>
 </body>
 </html>

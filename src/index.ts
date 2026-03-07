@@ -13,6 +13,12 @@ if (fs.existsSync(envPath)) {
 }
 
 import { notify } from "./notify";
+import {
+  initTelemetry,
+  recordTurn,
+  recordLog,
+  setStatus,
+} from "./telemetry";
 
 // Allow running from within another Claude Code session
 delete process.env.CLAUDECODE;
@@ -20,7 +26,7 @@ delete process.env.CLAUDECODE;
 const COMMANDS_FILE = path.join(__dirname, "..", "commands.txt");
 const INPUT_FILE = path.join(__dirname, "discord_input.txt");
 
-const CHALLENGE_CONTEXT = `=== COMMA CONTROLS CHALLENGE ===
+const CHALLENGE_CONTEXT = `=== COMMA CONTROLS CHALLENGE v2 ===
 Goal: Minimize total_cost = (lataccel_cost * 50) + jerk_cost for lateral car control.
   - lataccel_cost: MSE between actual and target lateral acceleration
   - jerk_cost: smoothness penalty on lateral acceleration changes
@@ -33,10 +39,11 @@ Controller interface:
       # future_plan: (lataccel[50], roll_lataccel[50], v_ego[50], a_ego[50])
       # return: steer_action in [-2, 2]
 
-Scores: PID baseline ~85 (100 segs) | SOTA tfpgh 43.776
-  tfpgh approach: CMA-ES MLP (~55) → GPU trajectory optimization (~43.2) → behavioral cloning student (43.776)
+Scores: PID baseline ~85 (100 segs) | SOTA tfpgh v2 17.789 (MPC) | tfpgh v1 43.776 (BC)
+  tfpgh v1: CMA-ES MLP (~55) -> GPU trajectory optimization (~43.2) -> behavioral cloning (43.776)
+  tfpgh v2: MPC with NumPy inverse CDF sampling of physics model probabilities (17.789)
 
-Reference code: vendor/commaai/ (challenge), vendor/tfpgh/ (best solution)
+Reference code: vendor/commaai/ (v2 challenge), vendor/tfpgh/ (v2 SOTA solution)
 Our controllers: src/controllers/ | Training: src/algos/ | Results: src/eval/results.json
 
 GPU: Local RTX 5070 Ti (16GB VRAM). Run experiments directly as python scripts.
@@ -48,7 +55,7 @@ const worker: Record<string, AgentDefinition> = {
   worker: {
     description:
       "Executes research tasks: reads code, writes controllers, runs training, evaluates results. Use this for any task that requires tools.",
-    prompt: `You are a research engineer working on the comma.ai Controls Challenge.
+    prompt: `You are a research engineer working on the comma.ai Controls Challenge v2.
 You receive specific tasks from the lead researcher and execute them thoroughly.
 
 ${CHALLENGE_CONTEXT}
@@ -60,7 +67,7 @@ Be thorough but efficient. Always report numbers, not just "it worked".`,
   },
 };
 
-const ORCHESTRATOR_PROMPT = `You are the lead researcher for the comma.ai Controls Challenge.
+const ORCHESTRATOR_PROMPT = `You are the lead researcher for the comma.ai Controls Challenge v2.
 
 ${CHALLENGE_CONTEXT}
 
@@ -70,7 +77,7 @@ You PLAN what to do, then delegate ONE task at a time to the worker using the Ag
 When the worker returns, you REVIEW results, UPDATE your plan, and delegate the next task.
 
 Each time you call the worker, give it a SPECIFIC, ACTIONABLE task. Not vague goals.
-Good: "Read vendor/tfpgh/controllers/bc.py and vendor/tfpgh/offline/config.py, summarize the architecture, loss function, and training setup"
+Good: "Read vendor/tfpgh/controllers/lookup.py and vendor/tfpgh/tinyphysics.py, summarize how the MPC lookup table was generated and how the physics model probabilities are sampled"
 Bad: "Study the SOTA solution"
 
 Good: "Write a CMA-ES training script to src/algos/cmaes_mlp.py that evolves a 2-hidden-layer MLP (32,16) to minimize total_cost on 100 segments. Run it for 5 minutes."
@@ -91,14 +98,15 @@ Only do this for genuine decision points — don't block on every step.
 
 === RESEARCH STRATEGY ===
 Phase 1: Understand
-  - Run PID baseline, study tfpgh solution architecture
+  - Run PID baseline, study tfpgh v2 MPC solution
+  - Understand how lookup.py and the inverse CDF sampling works
   - Establish fast local eval pipeline
 Phase 2: Quick wins
+  - Implement real-time MPC using physics model
   - CMA-ES on small MLP, improved PID with learned gains
-  - Simple behavioral cloning from PID trajectories
 Phase 3: Iterate
-  - Better controllers generate better data → retrain
-  - Explore novel architectures
+  - Better controllers generate better data -> retrain
+  - Explore novel architectures and MPC variants
 
 Track all results in src/eval/results.json. Always know current best score.
 After each worker task, briefly note what you learned and what to do next.`;
@@ -109,23 +117,25 @@ const promptArg = process.argv
   .slice(1)
   .join("=");
 
-const defaultPrompt = `Begin the research program for the comma.ai Controls Challenge.
+const defaultPrompt = `Begin the research program for the comma.ai Controls Challenge v2.
 
 Start with Phase 1:
 1. Run the PID baseline locally (100 segments) to confirm scores
-2. Study the tfpgh SOTA solution to understand what worked
-3. Then move to Phase 2: design a compute-efficient controller that can beat PID`;
+2. Study the tfpgh v2 SOTA solution — especially how the MPC and inverse CDF sampling works
+3. Then move to Phase 2: implement a real-time controller that can beat PID`;
 
 const prompt = promptArg || defaultPrompt;
 
 async function main() {
-  console.log(`\n=== rlclaw — comma controls challenge ===`);
+  console.log(`\n=== rlclaw — comma controls challenge v2 ===`);
   console.log(`Mode: orchestrator + single worker`);
   console.log(`GPU: RTX 5070 Ti (16GB VRAM)`);
   console.log(`Discord: notifications enabled`);
+  console.log(`Dashboard: http://localhost:3000`);
   console.log(`Commands: write to commands.txt to steer research`);
   console.log(`Prompt: ${prompt.slice(0, 100)}...\n`);
 
+  initTelemetry();
   await notify("Session started. Prompt: " + prompt.slice(0, 200));
 
   let turnCount = 0;
@@ -154,10 +164,18 @@ async function main() {
     if ("result" in message) {
       console.log("\n=== Result ===");
       console.log(message.result);
+      recordLog("SESSION COMPLETE: " + message.result.slice(0, 300));
+      setStatus("complete");
       await notify(message.result.slice(0, 500), "success");
     } else if ("message" in message) {
       turnCount++;
       const msg = message.message as any;
+
+      // Track token usage
+      if (msg?.usage) {
+        recordTurn(msg);
+      }
+
       if (msg?.content) {
         const text = Array.isArray(msg.content)
           ? msg.content
@@ -167,6 +185,7 @@ async function main() {
           : String(msg.content);
         if (text && msg.role === "assistant") {
           console.log(`\n[turn ${turnCount}] ${text.slice(0, 200)}`);
+          recordLog(text.slice(0, 300));
           if (turnCount % 3 === 0 || text.includes("best score") || text.includes("Phase")) {
             await notify(text.slice(0, 500));
           }
@@ -175,11 +194,14 @@ async function main() {
     }
   }
 
+  setStatus("complete");
   await notify("Session complete.", "success");
 }
 
 main().catch(async (err) => {
   console.error(err);
+  setStatus("error");
+  recordLog("ERROR: " + String(err).slice(0, 300));
   await notify(`Error: ${String(err).slice(0, 300)}`, "error");
   process.exit(1);
 });
