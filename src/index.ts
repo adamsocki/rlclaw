@@ -62,7 +62,11 @@ ${CHALLENGE_CONTEXT}
 
 You have access to all tools: read/write/edit files, run bash commands, search code.
 Execute the task you're given completely, then report back with concrete results and metrics.
-Be thorough but efficient. Always report numbers, not just "it worked".`,
+Be thorough but efficient. Always report numbers, not just "it worked".
+
+IMPORTANT: If you are running a long task (training, large eval), periodically check commands.txt
+in the project root. If it has content, read it, acknowledge by writing a short response to
+src/discord_response.txt, and adapt your current work if the command is relevant.`,
     tools: ["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
   },
 };
