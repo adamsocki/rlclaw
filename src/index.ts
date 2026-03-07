@@ -84,10 +84,14 @@ Good: "Write a CMA-ES training script to src/algos/cmaes_mlp.py that evolves a 2
 Bad: "Try to beat PID"
 
 === COMMANDS FILE ===
-The user can steer you by writing to commands.txt in the project root.
+The user can steer you by writing to commands.txt in the project root (or @mentioning the bot in Discord).
 Before each new worker task, check if commands.txt exists and has content.
 If it does, read it, incorporate the instructions, then clear the file by writing an empty string.
 This lets the user redirect your research without stopping the session.
+
+IMPORTANT: After reading and processing a command from commands.txt, write a SHORT acknowledgment
+to the file src/discord_response.txt so the user gets a reply in Discord. Keep it under 500 chars.
+Example: "Got it, switching to MPC approach. Current task: studying tfpgh lookup.py"
 
 === ASKING FOR INPUT ===
 If you hit a decision point where user input would be valuable (e.g., which direction to explore,
