@@ -2,25 +2,18 @@ import type { AgentDefinition } from "@anthropic-ai/claude-agent-sdk";
 
 const sharedTools = ["Read", "Write", "Edit", "Bash", "Glob", "Grep"] as const;
 
-const NOTEBOOK_POOL_INSTRUCTIONS = `
-=== NOTEBOOK CHECKOUT SYSTEM ===
-There are 3 Colab GPU notebooks: notebook_01.ipynb, notebook_02.ipynb, notebook_03.ipynb
-They run on Colab Pro+ T4/A100 GPUs via the VS Code bridge at http://127.0.0.1:18808
+const GPU_INSTRUCTIONS = `
+=== LOCAL GPU ===
+This machine has an NVIDIA RTX 5070 Ti (16GB VRAM) shared across all agents.
+Run GPU experiments directly via python scripts — no Colab bridge needed.
 
-To run an experiment:
-1. Check pool status: cat src/colab/pool_state.json
-2. Pick an AVAILABLE notebook
-3. Write your experiment code into src/colab/notebook_XX.ipynb
-4. Run it:
-   curl -X POST http://127.0.0.1:18808/run -H "Content-Type: application/json" \\
-     -d '{"filePath": "/home/jacob/rlclaw/src/colab/notebook_XX.ipynb"}'
-5. Poll for results (every 30s):
-   curl -X POST http://127.0.0.1:18808/read-outputs -H "Content-Type: application/json" \\
-     -d '{"filePath": "/home/jacob/rlclaw/src/colab/notebook_XX.ipynb"}'
-6. Read outputs and update pool_state.json status back to "available"
-
-HARD LIMIT: 15 minutes per experiment. Design experiments to finish well within this.
-If you need longer training, break it into checkpointed stages.
+Guidelines:
+- Run training scripts directly: python3 src/algos/train.py (etc.)
+- Use CUDA_VISIBLE_DEVICES=0 if needed
+- Be mindful of VRAM — 16GB shared across concurrent experiments
+- Keep experiments under 15 minutes for fast iteration
+- Save checkpoints to src/checkpoints/
+- If you need longer training, break it into checkpointed stages
 `;
 
 const CHALLENGE_CONTEXT = `
@@ -43,7 +36,7 @@ Baseline PID scores ~107. The tfpgh solution scores 43.776 using:
   2. GPU trajectory optimization (MPC-like) → score ~43.2 (but 41 days on CPU)
   3. Behavioral cloning student (1.5M params) → score 43.776
 
-OUR GOAL: Find COMPUTE-EFFICIENT methods. We have 3 Colab T4/A100 GPUs, 15 min per experiment.
+OUR GOAL: Find COMPUTE-EFFICIENT methods. We have a local RTX 5070 Ti (16GB VRAM), 15 min per experiment.
 Reference code: vendor/commaai/ (original challenge), vendor/tfpgh/ (best solution)
 Our controllers go in: src/controllers/
 `;
@@ -58,12 +51,12 @@ Your responsibilities:
 - Design small, fast controller architectures (target: <100K parameters)
 - Explore: tiny transformers, state-space models (S4/Mamba), KAN networks, hybrid PID+NN
 - Each architecture must implement BaseController.update()
-- Write training code that fits in a 15-min Colab experiment
+- Write training code that fits in a 15-min local GPU experiment
 - Compare inference speed (must run at 10Hz real-time minimum)
 
 Write controllers to src/controllers/ and training code to src/algos/.
 Study vendor/tfpgh/ for the behavioral cloning approach — can we do better with less compute?
-${NOTEBOOK_POOL_INSTRUCTIONS}`,
+${GPU_INSTRUCTIONS}`,
     tools: [...sharedTools],
   },
 
@@ -83,7 +76,7 @@ Key insight from tfpgh: Adding noise to past action features during training was
 win for fixing distribution shift. Explore this further.
 
 Write loss functions to src/rewards/ and training configs to src/algos/configs/.
-${NOTEBOOK_POOL_INSTRUCTIONS}`,
+${GPU_INSTRUCTIONS}`,
     tools: [...sharedTools],
   },
 
@@ -97,8 +90,6 @@ Your responsibilities:
 - Generate training data from PID rollouts (cheap baseline) and improved controllers
 - Implement efficient data loading and batching
 - Explore: DAgger (online data aggregation), self-play style improvement loops
-- Manage dataset storage on Google Drive for persistence across Colab sessions
-
 Key question: tfpgh spent 3 days on 8 GPUs generating PGTO teacher data.
 Can we generate good enough training data MUCH cheaper? Ideas:
   - Use PID + random perturbations as cheap teacher
@@ -106,7 +97,7 @@ Can we generate good enough training data MUCH cheaper? Ideas:
   - Iterative self-improvement: train student → generate data → retrain
 
 Write data pipelines to src/algos/data/ and generation scripts to src/algos/generate.py.
-${NOTEBOOK_POOL_INSTRUCTIONS}`,
+${GPU_INSTRUCTIONS}`,
     tools: [...sharedTools],
   },
 
@@ -120,42 +111,30 @@ Your responsibilities:
 - Track results in src/eval/results.json (controller name, total_cost, lataccel_cost, jerk_cost, params, inference_time)
 - Generate comparison reports and plots
 - Identify which experiments to prioritize based on results
-- Run quick local evals (num_segs=100) on CPU, full evals (num_segs=5000) on Colab
-
-Evaluation can run locally for quick checks (100 segments ~1 min on CPU).
-Full 5000-segment eval should use a Colab notebook.
+- Run quick evals (num_segs=100, ~7s) and full evals (num_segs=5000) locally
 
 Write evaluation code to src/eval/ and results to src/eval/results/.
-${NOTEBOOK_POOL_INSTRUCTIONS}`,
+${GPU_INSTRUCTIONS}`,
     tools: [...sharedTools],
   },
 
-  "colab-manager": {
+  "gpu-manager": {
     description:
-      "Manages Colab notebook pool: writes experiments into notebooks, monitors execution, collects results.",
-    prompt: `You are the Colab infrastructure manager.
-${NOTEBOOK_POOL_INSTRUCTIONS}
+      "Manages local GPU experiments: runs training scripts, monitors VRAM usage, collects results.",
+    prompt: `You are the GPU infrastructure manager.
+${GPU_INSTRUCTIONS}
 Your responsibilities:
-- Write experiment code into the 3 Colab notebooks (notebook_01.ipynb through notebook_03.ipynb)
-- Each notebook must:
-  a. Install deps (pip install -q torch stable-baselines3 onnxruntime etc.)
-  b. Clone/copy project code from Google Drive or upload
-  c. Run the experiment
-  d. Save results (checkpoints, metrics) to Google Drive
-  e. Print a clear RESULTS summary as the last cell output
-- Monitor running experiments via the bridge API
-- Enforce the 15-minute hard limit
-- Update pool_state.json when experiments start/complete
-- Manage Google Drive storage for checkpoints and datasets
+- Run training scripts on the local RTX 5070 Ti (16GB VRAM)
+- Monitor GPU utilization and VRAM usage (nvidia-smi)
+- Ensure experiments don't exceed 15 minutes or OOM
+- Save checkpoints to src/checkpoints/
+- Collect and report experiment metrics
+- Kill stuck or runaway processes
 
-Bridge API:
-  POST http://127.0.0.1:18808/run {"filePath": "..."}  — trigger run
-  POST http://127.0.0.1:18808/read-outputs {"filePath": "..."}  — read cell outputs
-  GET  http://127.0.0.1:18808/status  — get active notebook info
-  POST http://127.0.0.1:18808/run-cell {"filePath": "...", "cellIndex": N}  — run single cell
-
-Colab Pro+ resources: T4/A100 GPU, 600 CU/month, 24hr background execution.
-But our experiments are capped at 15 min each to keep iteration fast.`,
+Useful commands:
+  nvidia-smi                          — GPU status and VRAM usage
+  nvidia-smi --query-gpu=memory.used,memory.total --format=csv  — VRAM check
+  python3 src/algos/train.py          — run training scripts directly`,
     tools: [...sharedTools],
   },
 };
