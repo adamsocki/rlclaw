@@ -1,7 +1,15 @@
 const vscode = require("vscode");
 const http = require("http");
+const https = require("https");
 
 let server;
+
+const COLAB_GAPI = "https://colab.pa.googleapis.com";
+const COLAB_SCOPES = [
+  "profile",
+  "email",
+  "https://www.googleapis.com/auth/colaboratory",
+];
 
 function activate(context) {
   const port =
@@ -38,160 +46,181 @@ function activate(context) {
   });
 
   context.subscriptions.push({ dispose: () => server?.close() });
-
-  context.subscriptions.push(
-    vscode.commands.registerCommand("rlclaw.runNotebook", () =>
-      vscode.commands.executeCommand("notebook.execute")
-    ),
-    vscode.commands.registerCommand("rlclaw.getStatus", () =>
-      getStatus().then((s) =>
-        vscode.window.showInformationMessage(JSON.stringify(s))
-      )
-    )
-  );
 }
 
-function findNotebook(filePath) {
-  if (!filePath) return null;
-  const uri = vscode.Uri.file(filePath);
-  return vscode.workspace.notebookDocuments.find(
-    (n) => n.uri.fsPath === uri.fsPath
+// --- Google OAuth via VS Code's auth API (same session as Colab extension) ---
+
+async function getGoogleToken() {
+  const session = await vscode.authentication.getSession(
+    "google",
+    COLAB_SCOPES,
+    { createIfNone: false }
   );
+  if (!session) throw new Error("No Google auth session — sign in via Colab extension first");
+  return session.accessToken;
 }
 
-async function ensureOpen(filePath) {
-  let nb = findNotebook(filePath);
-  if (!nb) {
-    nb = await vscode.workspace.openNotebookDocument(
-      vscode.Uri.file(filePath)
-    );
-    await vscode.window.showNotebookDocument(nb);
-    await sleep(1000);
+// --- Colab GAPI helpers ---
+
+function httpsRequest(url, options = {}) {
+  return new Promise((resolve, reject) => {
+    const req = https.request(url, options, (res) => {
+      let data = "";
+      res.on("data", (chunk) => (data += chunk));
+      res.on("end", () => {
+        if (res.statusCode >= 400) {
+          reject(new Error(`HTTP ${res.statusCode}: ${data}`));
+        } else {
+          resolve(JSON.parse(data));
+        }
+      });
+    });
+    req.on("error", reject);
+    if (options.body) req.write(options.body);
+    req.end();
+  });
+}
+
+async function colabApi(path, method = "GET") {
+  const token = await getGoogleToken();
+  const url = new URL(path, COLAB_GAPI);
+  return httpsRequest(url, {
+    method,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "X-Colab-Client-Agent": "vscode",
+    },
+  });
+}
+
+// Get all assigned Colab runtimes
+async function listAssignments() {
+  return colabApi("/v1/assignments");
+}
+
+// Get a fresh proxy token for a runtime endpoint
+async function getProxyToken(endpointId) {
+  const url = `/v1/runtime-proxy-token?endpoint=${encodeURIComponent(endpointId)}&port=8080`;
+  return colabApi(url);
+}
+
+// Get full connection info for all runtimes (baseUrl + proxy token)
+async function getConnections() {
+  const assignments = await listAssignments();
+  if (!assignments?.assignments?.length) {
+    return { connections: [], note: "No Colab runtimes assigned" };
   }
-  return nb;
+
+  const connections = [];
+  for (const a of assignments.assignments) {
+    try {
+      const proxy = await getProxyToken(a.id || a.endpoint);
+      connections.push({
+        id: a.id || a.endpoint,
+        label: a.label,
+        accelerator: a.accelerator,
+        baseUrl: proxy.url,
+        token: proxy.token,
+        tokenTtl: proxy.tokenTtl,
+      });
+    } catch (err) {
+      connections.push({
+        id: a.id || a.endpoint,
+        label: a.label,
+        error: err.message,
+      });
+    }
+  }
+  return { connections };
 }
 
-// Focus a notebook and fire execute — don't await so we can start multiple
-async function fireExecute(filePath) {
-  const nb = await ensureOpen(filePath);
-  await vscode.window.showNotebookDocument(nb);
-  await sleep(300);
-  // Fire without awaiting — kernel runs independently
-  vscode.commands.executeCommand("notebook.execute");
-  await sleep(200); // let the command register
-  return nb;
+// Execute code on a Colab runtime via its Jupyter REST API
+async function executeOnRuntime(baseUrl, proxyToken, code) {
+  // First, list kernels to find an active one
+  const kernelsUrl = new URL("/api/kernels", baseUrl);
+  const kernels = await httpsRequest(kernelsUrl, {
+    method: "GET",
+    headers: {
+      "X-Colab-Runtime-Proxy-Token": proxyToken,
+      "X-Colab-Client-Agent": "vscode",
+    },
+  });
+
+  if (!kernels.length) throw new Error("No active kernels on runtime");
+
+  const kernelId = kernels[0].id;
+
+  // Execute via the Jupyter kernel REST API
+  const execUrl = new URL(`/api/kernels/${kernelId}/execute`, baseUrl);
+  const result = await httpsRequest(execUrl, {
+    method: "POST",
+    headers: {
+      "X-Colab-Runtime-Proxy-Token": proxyToken,
+      "X-Colab-Client-Agent": "vscode",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      code,
+      allow_stdin: false,
+    }),
+  });
+
+  return result;
 }
 
 async function handleRequest(path, body) {
   switch (path) {
+    // --- Colab direct API ---
+
+    // Get Google auth status
+    case "/auth": {
+      try {
+        const token = await getGoogleToken();
+        return { ok: true, tokenPrefix: token.slice(0, 10) + "..." };
+      } catch (err) {
+        return { ok: false, error: err.message };
+      }
+    }
+
+    // List assigned Colab runtimes
+    case "/runtimes":
+      return listAssignments();
+
+    // Get connections (baseUrl + proxy token) for all runtimes
+    case "/connections":
+      return getConnections();
+
+    // Get a proxy token for a specific endpoint
+    case "/proxy-token": {
+      const { endpointId } = JSON.parse(body);
+      return getProxyToken(endpointId);
+    }
+
+    // Execute code on a runtime
+    case "/execute": {
+      const { runtimeIndex, code, baseUrl, token } = JSON.parse(body);
+
+      // If baseUrl + token provided, use directly
+      if (baseUrl && token) {
+        return executeOnRuntime(baseUrl, token, code);
+      }
+
+      // Otherwise, resolve from runtimeIndex
+      const conns = await getConnections();
+      const idx = runtimeIndex || 0;
+      const conn = conns.connections[idx];
+      if (!conn || conn.error)
+        throw new Error(`Runtime ${idx} not available: ${conn?.error || "not found"}`);
+      return executeOnRuntime(conn.baseUrl, conn.token, code);
+    }
+
+    // --- Legacy VS Code notebook endpoints (kept for compatibility) ---
+
     case "/status":
       return getStatus();
 
     case "/status-all":
       return getStatusAll();
-
-    case "/open": {
-      const { filePath } = JSON.parse(body);
-      const doc = await vscode.workspace.openNotebookDocument(
-        vscode.Uri.file(filePath)
-      );
-      await vscode.window.showNotebookDocument(doc);
-      return { ok: true, file: filePath };
-    }
-
-    // Fire-and-forget: start execution, return immediately
-    case "/run": {
-      const parsed = body ? JSON.parse(body) : {};
-      if (parsed.filePath) {
-        await fireExecute(parsed.filePath);
-        return { ok: true, action: "run_all", file: parsed.filePath };
-      }
-      await vscode.commands.executeCommand("notebook.execute");
-      return { ok: true, action: "run_all", file: "active" };
-    }
-
-    // Start multiple notebooks in parallel — fire execute on each sequentially
-    // but kernels run independently so they execute concurrently
-    case "/run-parallel": {
-      const { filePaths } = JSON.parse(body);
-      if (!filePaths || !filePaths.length)
-        throw new Error("filePaths[] required");
-
-      const results = [];
-      for (const fp of filePaths) {
-        await fireExecute(fp);
-        results.push({ file: fp, started: true });
-        // Small delay to let VS Code register the execute command
-        await sleep(200);
-      }
-      return { ok: true, action: "run_parallel", results };
-    }
-
-    // Poll completion status for a notebook
-    case "/poll": {
-      const { filePath } = JSON.parse(body);
-      if (!filePath) throw new Error("filePath required");
-      const nb = findNotebook(filePath);
-      if (!nb) return { done: false, error: "notebook not open" };
-
-      const done = checkAllCellsDone(nb);
-      const hasErrors = checkHasErrors(nb);
-      return { file: filePath, done, hasErrors };
-    }
-
-    // Run and wait for completion
-    case "/run-and-wait": {
-      const { filePath, timeoutMs } = JSON.parse(body);
-      if (!filePath) throw new Error("filePath required");
-      const timeout = timeoutMs || 900000;
-
-      await fireExecute(filePath);
-
-      const nb = findNotebook(filePath);
-      const deadline = Date.now() + timeout;
-      while (Date.now() < deadline) {
-        await sleep(3000);
-        if (checkAllCellsDone(nb)) {
-          return { ok: true, file: filePath, outputs: collectOutputs(nb) };
-        }
-      }
-      return {
-        ok: false,
-        file: filePath,
-        error: "timeout",
-        outputs: collectOutputs(nb),
-      };
-    }
-
-    case "/run-cell": {
-      const { filePath, cellIndex } = JSON.parse(body);
-      if (filePath) {
-        await ensureOpen(filePath);
-        const doc = findNotebook(filePath);
-        if (doc) await vscode.window.showNotebookDocument(doc);
-        await sleep(300);
-      }
-      const editor = vscode.window.activeNotebookEditor;
-      if (!editor) throw new Error("No active notebook");
-      editor.selections = [new vscode.NotebookRange(cellIndex, cellIndex + 1)];
-      await vscode.commands.executeCommand("notebook.cell.execute");
-      return { ok: true, action: "run_cell", cellIndex };
-    }
-
-    case "/kernels":
-      return getKernels();
-
-    case "/select-kernel": {
-      const { kernelLabel } = JSON.parse(body);
-      await vscode.commands.executeCommand("notebook.selectKernel");
-      return { ok: true, action: "select_kernel", kernelLabel };
-    }
-
-    case "/read-outputs": {
-      const parsed = JSON.parse(body);
-      if (!parsed.filePath) throw new Error("filePath required");
-      return readNotebookOutputs(parsed.filePath);
-    }
 
     case "/notebooks": {
       return {
@@ -204,25 +233,38 @@ async function handleRequest(path, body) {
       };
     }
 
+    case "/read-outputs": {
+      const parsed = JSON.parse(body);
+      if (!parsed.filePath) throw new Error("filePath required");
+      return readNotebookOutputs(parsed.filePath);
+    }
+
     default:
       return {
         error: "unknown endpoint",
         endpoints: [
-          "GET /status",
-          "GET /status-all",
-          "GET /notebooks",
-          "POST /open {filePath}",
-          "POST /run {filePath?}",
-          "POST /run-parallel {filePaths[]}",
-          "POST /run-and-wait {filePath, timeoutMs?}",
-          "POST /run-cell {filePath?, cellIndex}",
-          "POST /poll {filePath}",
-          "GET /kernels",
-          "POST /select-kernel {kernelLabel}",
-          "POST /read-outputs {filePath}",
+          "GET /auth — check Google auth status",
+          "GET /runtimes — list assigned Colab runtimes",
+          "GET /connections — get baseUrl + proxy token for all runtimes",
+          "POST /proxy-token {endpointId} — get proxy token for one runtime",
+          "POST /execute {code, runtimeIndex?} or {code, baseUrl, token} — execute code on runtime",
+          "GET /status — active notebook status",
+          "GET /status-all — all notebooks status",
+          "GET /notebooks — list open notebooks",
+          "POST /read-outputs {filePath} — read notebook cell outputs",
         ],
       };
   }
+}
+
+// --- Legacy notebook helpers ---
+
+function findNotebook(filePath) {
+  if (!filePath) return null;
+  const uri = vscode.Uri.file(filePath);
+  return vscode.workspace.notebookDocuments.find(
+    (n) => n.uri.fsPath === uri.fsPath
+  );
 }
 
 function checkAllCellsDone(notebook) {
@@ -307,23 +349,10 @@ async function getStatusAll() {
   return result;
 }
 
-async function getKernels() {
-  const editor = vscode.window.activeNotebookEditor;
-  if (!editor) return { note: "no active notebook" };
-  return {
-    note: "Kernel info from active notebook",
-    notebookUri: editor.notebook.uri.toString(),
-  };
-}
-
 function readNotebookOutputs(filePath) {
   const nb = findNotebook(filePath);
   if (!nb) throw new Error(`Notebook not open: ${filePath}`);
   return { file: filePath, outputs: collectOutputs(nb) };
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function deactivate() {
