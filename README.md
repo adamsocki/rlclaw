@@ -139,15 +139,25 @@ workspace/              — (gitignored) agent's runtime workspace (controllers,
 ```bash
 git clone https://github.com/jacobbridges/rlclaw.git
 cd rlclaw
-python3.11 -m venv .venv
-source .venv/bin/activate
+conda create -n rlclaw python=3.11
+conda activate rlclaw
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 npm install
 ```
 
-If you want GPU-backed ONNX inference, replace `onnxruntime` in `requirements.txt`
-with `onnxruntime-gpu` before installing.
+If you want GPU-backed ONNX inference, replace `onnxruntime` with
+`onnxruntime-gpu` in `requirements.txt` before installing, or swap it in after
+the initial install.
+
+If you prefer a lighter-weight environment manager, a local `.venv` also works:
+
+```bash
+python3.11 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
 
 ### Environment Variables
 
@@ -202,14 +212,14 @@ journalctl -fu rlclaw-bot            # live bot logs
 
 ```bash
 # Quick eval (100 segments, ~7-20s depending on controller)
-source .venv/bin/activate
+conda activate rlclaw
 python src/eval/run_eval.py --controller pid --num_segs 100
 
 # Eval with result saving
 python src/eval/run_eval.py --controller mpc --num_segs 100 --save --tag mpc_v1
 
 # Using the vendor eval directly
-cd vendor/commaai && ../../.venv/bin/python tinyphysics.py --model_path ./models/tinyphysics.onnx --data_path ./data --num_segs 100 --controller pid
+cd vendor/commaai && python tinyphysics.py --model_path ./models/tinyphysics.onnx --data_path ./data --num_segs 100 --controller pid
 ```
 
 ## Controllers
@@ -224,7 +234,7 @@ cd vendor/commaai && ../../.venv/bin/python tinyphysics.py --model_path ./models
 
 ```bash
 # CMA-ES training (20 segments, 5 min)
-source .venv/bin/activate
+conda activate rlclaw
 python -m src.algos.cmaes_train --num_segs 20 --max_time 300
 
 # Resume from checkpoint
