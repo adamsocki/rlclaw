@@ -130,7 +130,7 @@ workspace/              — (gitignored) agent's runtime workspace (controllers,
 ### Prerequisites
 
 - Node.js 18+
-- Python 3.11+ with numpy, pandas, onnxruntime, cma, tqdm
+- Python 3.11+
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI installed and authenticated
 - NVIDIA GPU with CUDA (tested on RTX 5070 Ti)
 
@@ -139,9 +139,15 @@ workspace/              — (gitignored) agent's runtime workspace (controllers,
 ```bash
 git clone https://github.com/jacobbridges/rlclaw.git
 cd rlclaw
+python3.11 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
 npm install
-pip install numpy pandas onnxruntime cma tqdm
 ```
+
+If you want GPU-backed ONNX inference, replace `onnxruntime` in `requirements.txt`
+with `onnxruntime-gpu` before installing.
 
 ### Environment Variables
 
@@ -196,13 +202,14 @@ journalctl -fu rlclaw-bot            # live bot logs
 
 ```bash
 # Quick eval (100 segments, ~7-20s depending on controller)
+source .venv/bin/activate
 python src/eval/run_eval.py --controller pid --num_segs 100
 
 # Eval with result saving
 python src/eval/run_eval.py --controller mpc --num_segs 100 --save --tag mpc_v1
 
 # Using the vendor eval directly
-cd vendor/commaai && python3 tinyphysics.py --model_path ./models/tinyphysics.onnx --data_path ./data --num_segs 100 --controller pid
+cd vendor/commaai && ../../.venv/bin/python tinyphysics.py --model_path ./models/tinyphysics.onnx --data_path ./data --num_segs 100 --controller pid
 ```
 
 ## Controllers
@@ -217,10 +224,11 @@ cd vendor/commaai && python3 tinyphysics.py --model_path ./models/tinyphysics.on
 
 ```bash
 # CMA-ES training (20 segments, 5 min)
-cd /home/jacob/rlclaw && python3 -m src.algos.cmaes_train --num_segs 20 --max_time 300
+source .venv/bin/activate
+python -m src.algos.cmaes_train --num_segs 20 --max_time 300
 
 # Resume from checkpoint
-python3 -m src.algos.cmaes_train --num_segs 20 --max_time 300 --resume
+python -m src.algos.cmaes_train --num_segs 20 --max_time 300 --resume
 ```
 
 ## Discord Bot Commands
